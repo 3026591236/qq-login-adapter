@@ -174,4 +174,25 @@ async def login_logout(body: LogoutRequest) -> dict:
 async def ingest_event(request: Request) -> dict:
     payload = await request.json()
     event = adapter.normalize_event(payload)
-    return {"ok": True, "normalized": event.to_framework_like_dict()}
+
+    # dispatch handlers
+    dispatch_results = await adapter.router.dispatch(event)
+
+    # auto reply for message events
+    outbound: list[dict] = []
+    if event.post_type == "message":
+        for r in dispatch_results:
+            if not r.handled:
+                continue
+            for reply in r.replies:
+                if event.message_type == "group" and event.group_id:
+                    outbound.append(await adapter.send_group_msg(event.group_id, reply))
+                elif event.user_id:
+                    outbound.append(await adapter.send_private_msg(event.user_id, reply))
+
+    return {
+        "ok": True,
+        "normalized": event.to_framework_like_dict(),
+        "dispatch": [r.__dict__ for r in dispatch_results],
+        "outbound": outbound,
+    }

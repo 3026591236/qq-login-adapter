@@ -8,8 +8,11 @@ from .message_store import MessageStore
 from .models import IncomingEvent, SenderInfo
 from .napcat_client import NapCatWebUIClient
 from .onebot_client import OneBotClient
+from .handler_loader import load_user_handlers
 from .qrcode_utils import export_napcat_qrcode
+from .router import build_default_router
 from .session import LoginSessionState
+from .storage import SQLiteStorage
 from .watchdog import LoginWatchdog
 
 
@@ -116,8 +119,11 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
         self.client = NapCatWebUIClient()
         self.onebot = OneBotClient()
         self.store = MessageStore(limit=200)
+        self.storage = SQLiteStorage()
+        self.router = build_default_router()
+        self.handlers_loaded = load_user_handlers(self.router)
         self.watchdog = LoginWatchdog(self.client)
-        self._not_ready_message = "已接入登录管理与基础消息收发，完整独立协议层仍未完成"
+        self._not_ready_message = "已接入登录管理、消息收发、事件路由与持久化（基于 NapCat/OneBot）"
         self._password_md5 = ""
 
     async def start(self) -> None:
@@ -178,6 +184,7 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
             "running": self.running,
             "implemented": False,
             "message": self._not_ready_message,
+            "handlers": self.handlers_loaded,
             "napcat_ok": napcat_ok,
             "napcat_info": napcat_info,
             "onebot_ok": onebot_ok,
@@ -384,6 +391,16 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
             "message": message,
             "response": resp,
         })
+        try:
+            self.storage.save_outbound(
+                action="send_private_msg",
+                message=message,
+                response=resp,
+                target_user_id=int(user_id),
+                ok=bool((resp or {}).get("retcode", 0) == 0) if isinstance(resp, dict) else True,
+            )
+        except Exception:
+            pass
         return {"ok": True, "action": "send_private_msg", "response": resp, "state": self.state.to_dict()}
 
     async def send_group_msg(self, group_id: int, message: str | list[dict]) -> dict[str, Any]:
@@ -394,6 +411,16 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
             "message": message,
             "response": resp,
         })
+        try:
+            self.storage.save_outbound(
+                action="send_group_msg",
+                message=message,
+                response=resp,
+                target_group_id=int(group_id),
+                ok=bool((resp or {}).get("retcode", 0) == 0) if isinstance(resp, dict) else True,
+            )
+        except Exception:
+            pass
         return {"ok": True, "action": "send_group_msg", "response": resp, "state": self.state.to_dict()}
 
     async def get_message_snapshot(self) -> dict[str, Any]:
@@ -421,5 +448,10 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
             message=message,
             extra={"source": payload.get("source", "onebot"), "payload": payload},
         )
-        self.store.add_inbound(event.to_framework_like_dict())
+        normalized = event.to_framework_like_dict()
+        self.store.add_inbound(normalized)
+        try:
+            self.storage.save_inbound_event(event)
+        except Exception:
+            pass
         return event

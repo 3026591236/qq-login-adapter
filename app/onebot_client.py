@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import httpx
 
 
 class OneBotClient:
-    def __init__(self, base_url: str = "http://127.0.0.1:3000") -> None:
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None) -> None:
+        base_url = base_url or os.getenv("ONEBOT_API_BASE", "http://127.0.0.1:3000")
+        self.base_url = str(base_url).rstrip("/")
 
     async def _post(self, action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=20) as client:
