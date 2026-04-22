@@ -4,6 +4,7 @@ from fastapi import FastAPI, Request
 from pydantic import BaseModel
 
 from .adapter import PlaceholderQQLoginAdapter
+from .web import render_panel_html
 
 adapter = PlaceholderQQLoginAdapter()
 app = FastAPI(title="qq-login-adapter")
@@ -40,6 +41,16 @@ class WatchdogStartRequest(BaseModel):
     interval_seconds: int = 30
 
 
+class SendPrivateMessageRequest(BaseModel):
+    user_id: int
+    message: str
+
+
+class SendGroupMessageRequest(BaseModel):
+    group_id: int
+    message: str
+
+
 class LogoutRequest(BaseModel):
     reason: str = "manual logout"
 
@@ -57,6 +68,11 @@ async def shutdown_event() -> None:
 @app.get("/")
 async def index() -> dict:
     return {"ok": True, "service": "qq-login-adapter"}
+
+
+@app.get("/panel")
+async def panel():
+    return render_panel_html()
 
 
 @app.get("/healthz")
@@ -132,6 +148,21 @@ async def watchdog_stop() -> dict:
 @app.get("/watchdog/status")
 async def watchdog_status() -> dict:
     return await adapter.watchdog_status()
+
+
+@app.post("/message/private")
+async def send_private_message(body: SendPrivateMessageRequest) -> dict:
+    return await adapter.send_private_msg(user_id=body.user_id, message=body.message)
+
+
+@app.post("/message/group")
+async def send_group_message(body: SendGroupMessageRequest) -> dict:
+    return await adapter.send_group_msg(group_id=body.group_id, message=body.message)
+
+
+@app.get("/messages")
+async def message_snapshot() -> dict:
+    return await adapter.get_message_snapshot()
 
 
 @app.post("/login/logout")

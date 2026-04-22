@@ -4,8 +4,10 @@ import hashlib
 from abc import ABC, abstractmethod
 from typing import Any
 
-from .models import IncomingEvent
+from .message_store import MessageStore
+from .models import IncomingEvent, SenderInfo
 from .napcat_client import NapCatWebUIClient
+from .onebot_client import OneBotClient
 from .qrcode_utils import export_napcat_qrcode
 from .session import LoginSessionState
 from .watchdog import LoginWatchdog
@@ -99,6 +101,10 @@ class QQLoginAdapter(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_message_snapshot(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+    @abstractmethod
     def normalize_event(self, payload: dict[str, Any]) -> IncomingEvent:
         raise NotImplementedError
 
@@ -108,8 +114,10 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
         self.running = False
         self.state = LoginSessionState()
         self.client = NapCatWebUIClient()
+        self.onebot = OneBotClient()
+        self.store = MessageStore(limit=200)
         self.watchdog = LoginWatchdog(self.client)
-        self._not_ready_message = "消息收发尚未接入，登录流已优先对接 NapCat WebUI"
+        self._not_ready_message = "已接入登录管理与基础消息收发，完整独立协议层仍未完成"
         self._password_md5 = ""
 
     async def start(self) -> None:
@@ -156,6 +164,14 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
         except Exception as exc:
             napcat_ok = False
             self.state.mark_error(f"NapCat WebUI unavailable: {exc}")
+        onebot_ok = True
+        onebot_info: dict[str, Any] = {}
+        try:
+            onebot_resp = await self.onebot.get_status()
+            onebot_info = ((onebot_resp or {}).get("data") or {}) if isinstance(onebot_resp, dict) else {}
+        except Exception as exc:
+            onebot_ok = False
+            onebot_info = {"error": str(exc)}
         return {
             "ok": True,
             "adapter": self.name,
@@ -164,8 +180,11 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
             "message": self._not_ready_message,
             "napcat_ok": napcat_ok,
             "napcat_info": napcat_info,
+            "onebot_ok": onebot_ok,
+            "onebot_info": onebot_info,
             "watchdog": (await self.watchdog.status())["state"],
             "login_state": self.state.to_dict(),
+            "messages": self.store.snapshot(),
         }
 
     async def get_login_state(self) -> dict[str, Any]:
@@ -358,30 +377,49 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
         return {"ok": True, "message": "已退出当前登录态", "state": self.state.to_dict()}
 
     async def send_private_msg(self, user_id: int, message: str | list[dict]) -> dict[str, Any]:
-        return {
-            "ok": False,
-            "error": "not implemented",
+        resp = await self.onebot.send_private_msg(user_id, message)
+        self.store.add_outbound({
             "action": "send_private_msg",
-            "user_id": user_id,
-            "state": self.state.to_dict(),
-        }
+            "user_id": int(user_id),
+            "message": message,
+            "response": resp,
+        })
+        return {"ok": True, "action": "send_private_msg", "response": resp, "state": self.state.to_dict()}
 
     async def send_group_msg(self, group_id: int, message: str | list[dict]) -> dict[str, Any]:
-        return {
-            "ok": False,
-            "error": "not implemented",
+        resp = await self.onebot.send_group_msg(group_id, message)
+        self.store.add_outbound({
             "action": "send_group_msg",
-            "group_id": group_id,
-            "state": self.state.to_dict(),
-        }
+            "group_id": int(group_id),
+            "message": message,
+            "response": resp,
+        })
+        return {"ok": True, "action": "send_group_msg", "response": resp, "state": self.state.to_dict()}
+
+    async def get_message_snapshot(self) -> dict[str, Any]:
+        return {"ok": True, **self.store.snapshot()}
 
     def normalize_event(self, payload: dict[str, Any]) -> IncomingEvent:
-        return IncomingEvent(
+        sender = payload.get("sender") or {}
+        message = payload.get("message") if isinstance(payload.get("message"), list) else []
+        event = IncomingEvent(
             post_type=payload.get("post_type") or "message",
             message_type=payload.get("message_type") or "private",
+            notice_type=payload.get("notice_type") or "",
+            request_type=payload.get("request_type") or "",
+            meta_event_type=payload.get("meta_event_type") or "",
+            sub_type=payload.get("sub_type") or "",
             user_id=payload.get("user_id"),
             group_id=payload.get("group_id"),
             message_id=payload.get("message_id"),
             raw_message=payload.get("raw_message") or payload.get("text") or "",
-            extra={"source": payload.get("source", "standalone")},
+            sender=SenderInfo(
+                user_id=sender.get("user_id") or payload.get("user_id"),
+                nickname=str(sender.get("nickname") or sender.get("card") or ""),
+                role=str(sender.get("role") or "member"),
+            ),
+            message=message,
+            extra={"source": payload.get("source", "onebot"), "payload": payload},
         )
+        self.store.add_inbound(event.to_framework_like_dict())
+        return event
