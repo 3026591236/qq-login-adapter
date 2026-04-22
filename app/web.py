@@ -62,6 +62,11 @@ def render_panel_html() -> HTMLResponse:
         <pre id=\"loginResult\">-</pre>
       </div>
       <div class=\"card\">
+        <h2>插件/Handlers</h2>
+        <div class=\"row\"><button onclick=\"handlersReload()\">重载 handlers</button><button onclick=\"loadStatus()\">刷新状态</button></div>
+        <pre id=\"handlers\">-</pre>
+      </div>
+      <div class=\"card\">
         <h2>最近消息</h2>
         <button onclick=\"loadMessages()\">刷新消息</button>
         <pre id=\"messages\">-</pre>
@@ -71,7 +76,7 @@ def render_panel_html() -> HTMLResponse:
   <script>
     async function j(url, options={}) { const r = await fetch(url, {headers:{'Content-Type':'application/json'}, ...options}); return await r.json(); }
     function show(id, data) { document.getElementById(id).textContent = JSON.stringify(data, null, 2); }
-    async function loadStatus(){ show('status', await j('/healthz')); show('watchdog', await j('/watchdog/status')); }
+    async function loadStatus(){ const s = await j('/healthz'); show('status', s); show('watchdog', await j('/watchdog/status')); show('handlers', {loaded: (s.handlers||{}), registry: (s.handler_registry||[])}); }
     async function loadMessages(){ show('messages', await j('/messages')); }
     async function watchdogStart(){ const interval_seconds = Number(document.getElementById('interval').value || 30); show('watchdog', await j('/watchdog/start', {method:'POST', body: JSON.stringify({interval_seconds})})); }
     async function watchdogCheck(){ show('watchdog', await j('/watchdog/check', {method:'POST', body: '{}'})); }
@@ -80,6 +85,7 @@ def render_panel_html() -> HTMLResponse:
     async function sendGroup(){ const group_id = Number(document.getElementById('groupId').value); const message = document.getElementById('groupMessage').value; show('groupResult', await j('/message/group', {method:'POST', body: JSON.stringify({group_id, message})})); loadMessages(); }
     async function startQr(){ show('loginResult', await j('/login/qrcode', {method:'POST', body: JSON.stringify({account:''})})); }
     async function exportQr(){ show('loginResult', await j('/login/qrcode/export')); }
+    async function handlersReload(){ show('handlers', await j('/handlers/reload', {method:'POST', body:'{}'})); await loadStatus(); }
     loadStatus();
     loadMessages();
   </script>

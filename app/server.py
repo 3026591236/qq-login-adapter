@@ -165,6 +165,11 @@ async def message_snapshot() -> dict:
     return await adapter.get_message_snapshot()
 
 
+@app.post("/handlers/reload")
+async def handlers_reload() -> dict:
+    return await adapter.reload_handlers()
+
+
 @app.post("/login/logout")
 async def login_logout(body: LogoutRequest) -> dict:
     return await adapter.logout(reason=body.reason)

@@ -10,7 +10,7 @@ from .napcat_client import NapCatWebUIClient
 from .onebot_client import OneBotClient
 from .handler_loader import load_user_handlers
 from .qrcode_utils import export_napcat_qrcode
-from .router import build_default_router
+from .router import EventRouter, build_default_router
 from .session import LoginSessionState
 from .storage import SQLiteStorage
 from .watchdog import LoginWatchdog
@@ -18,6 +18,10 @@ from .watchdog import LoginWatchdog
 
 class QQLoginAdapter(ABC):
     name: str = "qq_login"
+
+    @abstractmethod
+    async def reload_handlers(self) -> dict[str, Any]:
+        raise NotImplementedError
 
     @abstractmethod
     async def sync_login_state(self) -> dict[str, Any]:
@@ -113,6 +117,16 @@ class QQLoginAdapter(ABC):
 
 
 class PlaceholderQQLoginAdapter(QQLoginAdapter):
+    async def reload_handlers(self) -> dict[str, Any]:
+        # rebuild router from defaults and re-load user modules
+        self.router = build_default_router()
+        self.handlers_loaded = load_user_handlers(self.router)
+        return {
+            "ok": True,
+            "handlers": self.handlers_loaded,
+            "registry": self.router.list_handlers(),
+        }
+
     def __init__(self) -> None:
         self.running = False
         self.state = LoginSessionState()
@@ -185,6 +199,7 @@ class PlaceholderQQLoginAdapter(QQLoginAdapter):
             "implemented": False,
             "message": self._not_ready_message,
             "handlers": self.handlers_loaded,
+            "handler_registry": self.router.list_handlers(),
             "napcat_ok": napcat_ok,
             "napcat_info": napcat_info,
             "onebot_ok": onebot_ok,
